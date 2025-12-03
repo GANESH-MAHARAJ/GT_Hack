@@ -94,6 +94,7 @@ User → Privacy Masking → Agent-1 (Intent LLM)
 ---
 
 ## 📁 Project Structure
+
 GT_hack/
 │
 ├── backend/
