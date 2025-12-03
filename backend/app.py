@@ -10,6 +10,12 @@ from backend.services.store_locator import get_nearby_stores
 from backend.services.offers import get_offers_for_stores
 from backend.llm.agent_intent import get_intents
 from backend.llm.agent_response import get_final_response
+from backend.services.user_memory import (
+    get_user_profile,
+    update_conversation_history,
+    set_last_seen_store,
+)
+
 
 
 app = FastAPI(title="GroundTruth Concierge API")
@@ -67,13 +73,17 @@ def chat_endpoint(payload: ChatRequest):
     lat = payload.lat
     lng = payload.lng
 
-    # 1) Get lightweight user profile
+    # 1) Get profiles
+    # Persistent profile (preferences, history, last order, etc.)
+    persistent_profile = get_user_profile(user_id)
+    # Lightweight profile (for LLM context, from users.json)
     user_profile = get_user_profile_light(user_id)
+
 
     # 2) Mask PII in the user message
     masked_message, pii_map = mask_pii(message)
 
-    # 3) Agent-1: generate intents
+        # 3) Agent-1: generate intents
     intent_input = {
         "user_message": masked_message,
         "user_profile": user_profile,
@@ -82,21 +92,52 @@ def chat_endpoint(payload: ChatRequest):
     intents_result = get_intents(intent_input)
     intents = intents_result.get("intents", [])
 
+    # ---- Decide if this looks like a FAQ / policy question ----
+    user_lower = masked_message.lower()
+    heuristic_faq = any(
+        kw in user_lower
+        for kw in [
+            "return", "refund", "return policy", "shipping",
+            "delivery", "loyalty", "membership", "points",
+            "allergen", "allergy", "wifi", "wi-fi", "terms"
+        ]
+    )
+
+    # If Agent-1 explicitly asks for FAQ data, respect that too
+    explicit_faq = any(
+        "faq_answer" in (i.get("required_data") or [])
+        for i in intents
+    )
+
+    needs_faq = heuristic_faq or explicit_faq
+
     # 4) Fetch store context based on location + intents
     candidate_stores = get_nearby_stores(lat, lng, intents=intents)
 
     # 5) Fetch offers for those stores
     offers = get_offers_for_stores(user_id, candidate_stores)
 
-    # 6) Bundle context for Agent-2
+    # 6) RAG: if this is FAQ-ish, query vector store
+    rag_snippets = []
+    if needs_faq:
+        from backend.services.rag_service import rag_query  # import here to avoid cycles
+        rag_snippets = rag_query(masked_message, top_k=3)
+        # For FAQ/policy questions, we usually don't want store recommendations
+        candidate_stores = []
+
+    # 7) Bundle context for Agent-2
     context_bundle = {
         "user_message_masked": masked_message,
         "intents": intents,
         "location": {"lat": lat, "lng": lng},
         "candidate_stores": candidate_stores,
         "user_profile_light": user_profile,
+        "user_profile_persistent": persistent_profile,
         "offers": offers,
+        "rag_snippets": rag_snippets,
     }
+
+
 
     response_result = get_final_response(context_bundle)
 
@@ -106,6 +147,8 @@ def chat_endpoint(payload: ChatRequest):
 
     # 7) Safe unmask (currently unmask everything; you can restrict kinds later)
     reply_unmasked = safe_unmask(reply_text, pii_map)
+
+    update_conversation_history(user_id, message, reply_unmasked)
 
     # 8) Build selected_store summary
     store_summary_obj: Optional[StoreSummary] = None
@@ -120,6 +163,25 @@ def chat_endpoint(payload: ChatRequest):
                     is_open_now=s.get("is_open_now"),
                 )
                 break
+    
+    # 9) Update user memory (conversation history + last seen store)
+    update_conversation_history(user_id, message, reply_unmasked)
+
+    if store_summary_obj is not None:
+        # store a slim version of the selected store
+        set_last_seen_store(
+            user_id,
+            {
+                "id": store_summary_obj.id,
+                "name": store_summary_obj.name,
+                "distance_m": store_summary_obj.distance_m,
+                "rating": store_summary_obj.rating,
+                "is_open_now": store_summary_obj.is_open_now,
+            },
+        )
+
+
+
 
     return ChatResponse(
         reply=reply_unmasked,

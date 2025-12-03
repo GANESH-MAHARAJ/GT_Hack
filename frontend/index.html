@@ -173,6 +173,9 @@
   </div>
 
   <script>
+    let USER_LAT = null;
+    let USER_LNG = null;
+
     const API_URL = "http://localhost:8000/chat";
     const messagesEl = document.getElementById("messages");
     const inputEl = document.getElementById("input");
@@ -181,6 +184,7 @@
 
     const USER_ID = "demo_user";
 
+    
     function appendMessage(text, sender = "bot", storeMeta = null) {
       const wrapper = document.createElement("div");
 
