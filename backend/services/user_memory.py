@@ -41,3 +41,16 @@ def set_last_order(user_id: str, order: Dict[str, Any]):
 def set_last_seen_store(user_id: str, store_info: Dict[str, Any]):
     profile = get_user_profile(user_id)
     profile["last_seen_store"] = store_info
+
+def reset_user(user_id: str):
+    """
+    Clear memory for a single user.
+    """
+    USER_MEMORY.pop(user_id, None)
+
+
+def reset_all():
+    """
+    Clear memory for all users.
+    """
+    USER_MEMORY.clear()

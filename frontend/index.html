@@ -146,6 +146,42 @@
       color: #6b7280;
       padding: 0 12px 4px;
     }
+
+    .reset-container {
+      padding: 6px 12px;
+      border-top: 1px solid #1f2937;
+      background: #020617;
+      display: flex;
+      justify-content: center;
+    }
+
+    .reset-btn {
+      font-size: 11px;
+      padding: 6px 12px;
+      border-radius: 999px;
+      border: 1px solid #374151;
+      background: #0f172a;
+      color: #9ca3af;
+      cursor: pointer;
+      transition: all 0.18s ease-in-out;
+    }
+
+    .reset-btn:hover {
+      background: #1e293b;
+      color: #e5e7eb;
+      border-color: #475569;
+    }
+
+    .reset-btn:active {
+      background: #334155;
+      transform: scale(0.96);
+    }
+
+    .reset-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
   </style>
 </head>
 <body>
@@ -161,6 +197,10 @@
     <div id="messages" class="messages"></div>
     <div id="status" class="status">Ready. Try: “I am cold and want coffee”.</div>
 
+    <div class="reset-container">
+      <button id="resetBtn" class="reset-btn">Reset Session</button>
+    </div>
+
     <div class="input-bar">
       <input
         id="input"
@@ -171,6 +211,7 @@
       <button id="sendBtn">Send</button>
     </div>
   </div>
+
 
   <script>
     let USER_LAT = null;
@@ -183,6 +224,31 @@
     const statusEl = document.getElementById("status");
 
     const USER_ID = "demo_user";
+
+    const RESET_URL = "http://localhost:8000/reset_user/" + USER_ID;
+    const resetBtn = document.getElementById("resetBtn");
+
+    resetBtn.addEventListener("click", async () => {
+      try {
+        resetBtn.disabled = true;
+        statusEl.textContent = "Resetting session…";
+
+        await fetch(RESET_URL, { method: "POST" });
+
+        // Clear UI messages too
+        messagesEl.innerHTML = "";
+        appendMessage(
+          "Session reset. I’ve forgotten our past conversation. You can start fresh now.",
+          "bot"
+        );
+        statusEl.textContent = "Session reset.";
+      } catch (e) {
+        console.error(e);
+        statusEl.textContent = "Error resetting session.";
+      } finally {
+        resetBtn.disabled = false;
+      }
+    });
 
     
     function appendMessage(text, sender = "bot", storeMeta = null) {

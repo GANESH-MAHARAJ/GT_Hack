@@ -1,0 +1,14 @@
+1. install the lib's mentioned in requrements.txt
+2. also install ollama and pull llama3.1latest model
+
+3. next run backend by using "uvicorn backend.app:app --reload" 
+3.1. fastAPI : "http://localhost:8000"
+Endpoints:
+
+/chat — main AI endpoint
+
+/reset_user/{id} — clear user memory
+
+/reset_all — clear all user memory
+
+4. next go live with the "index.html" file (it's the froont end)

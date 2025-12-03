@@ -14,7 +14,10 @@ from backend.services.user_memory import (
     get_user_profile,
     update_conversation_history,
     set_last_seen_store,
+    reset_user,
+    reset_all,
 )
+
 
 
 
@@ -194,6 +197,17 @@ def chat_endpoint(payload: ChatRequest):
             "raw_response": response_result,
         },
     )
+
+@app.post("/reset_user/{user_id}")
+def reset_user_endpoint(user_id: str):
+    reset_user(user_id)
+    return {"status": "ok", "user_id": user_id}
+
+
+@app.post("/reset_all")
+def reset_all_endpoint():
+    reset_all()
+    return {"status": "ok"}
 
 
 if __name__ == "__main__":
