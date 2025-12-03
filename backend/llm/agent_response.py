@@ -1,9 +1,67 @@
+import json
 from typing import Dict, Any, List, Optional
 
+import ollama
 
-def _choose_best_store(stores: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+
+MODEL_NAME = "llama3.1"  # same as Agent-1; keep consistent
+
+
+RESPONSE_SYSTEM_PROMPT = """
+You are a hyper-personalized customer support assistant for retail and coffee shops.
+
+You will receive a JSON object with:
+- user_message_masked: the user's message (with PII masked)
+- intents: list of candidate intents from Agent-1 (name, confidence, reason, required_data, category)
+- location: {lat, lng} (may be null)
+- candidate_stores: list of nearby stores, each like:
+  {
+    "id": "store_101",
+    "name": "Starbucks MG Road",
+    "lat": 12.9717,
+    "lng": 77.5948,
+    "distance_m": 60.0,
+    "opening_hours": "08:00-22:00",
+    "is_open_now": true,
+    "rating": 4.4,
+    "review_count": 892
+  }
+- user_profile_light: small profile (e.g., name, loyalty_tier, favorite_tags)
+- offers: list of coupons per store, e.g.:
+  {
+    "store_id": "store_101",
+    "coupon_code": "HOT10",
+    "description": "10% off hot beverages",
+    "valid_till": "2025-12-31"
+  }
+
+Your tasks:
+1. Choose the single most relevant PRIMARY intent.
+2. Choose the BEST store (if relevant), typically:
+   - Open now, and
+   - Nearest distance_m.
+3. Compose a friendly, concise reply HELPFUL TO THE USER:
+   - Reference the chosen store with its name and approximate distance in meters.
+   - Mention whether it's open now.
+   - Optionally incorporate one relevant offer if available.
+   - Do NOT expose any internal IDs or raw JSON.
+4. Do NOT hallucinate. Only use the data given.
+5. If no suitable store exists (e.g., all closed or list empty), say that clearly and suggest an alternative (like coming back later or another nearby store).
+6. You MUST reply in VALID JSON ONLY with this schema:
+{
+  "selected_intent": "STRING_OR_NULL",
+  "selected_store_id": "STRING_OR_NULL",
+  "reasoning": "STRING",
+  "reply": "STRING"
+}
+No backticks, no prose outside JSON.
+"""
+
+
+def _heuristic_choose_store(stores: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """
-    Simple heuristic: prefer open + nearest; else nearest.
+    Small local heuristic used to propose a 'best' store to the model.
+    Not strictly required, but we can suggest one in context if helpful.
     """
     if not stores:
         return None
@@ -19,58 +77,66 @@ def _choose_best_store(stores: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]
 
 def get_final_response(context_bundle: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Agent-2 stub:
-    Uses heuristics instead of LLM for now.
-    Later: swap to llama3.1 for natural language response generation.
+    Agent-2: call llama3.1 with the context bundle,
+    ask it to select intent + store + craft final message.
     """
-    user_msg = context_bundle.get("user_message_masked", "")
-    intents = context_bundle.get("intents", [])
-    stores = context_bundle.get("candidate_stores", [])
-    user_profile = context_bundle.get("user_profile_light", {})
-    offers = context_bundle.get("offers", [])
+    # Optionally, we can add a small heuristic hint about best_store
+    candidate_stores: List[Dict[str, Any]] = context_bundle.get("candidate_stores", []) or []
+    best_store = _heuristic_choose_store(candidate_stores)
+    context_bundle["best_store_hint"] = best_store  # purely advisory for the model
 
-    name = user_profile.get("name", "there")
+    # Call llama via Ollama
+    resp = ollama.chat(
+        model=MODEL_NAME,
+        messages=[
+            {"role": "system", "content": RESPONSE_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": json.dumps(context_bundle, ensure_ascii=False),
+            },
+        ],
+        options={
+            "temperature": 0.3,  # a bit more creative but still stable
+        },
+    )
 
-    # Pick best intent (highest confidence)
-    primary_intent = None
-    if intents:
-        primary_intent = max(intents, key=lambda i: i.get("confidence", 0.0))
+    content = resp["message"]["content"].strip()
 
-    primary_intent_name = primary_intent.get("name") if primary_intent else None
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        # Fallback: if model fails JSON, construct basic reply using heuristics
+        primary_intent_name = None
+        if context_bundle.get("intents"):
+            primary_intent = max(
+                context_bundle["intents"], key=lambda i: i.get("confidence", 0.0)
+            )
+            primary_intent_name = primary_intent.get("name")
 
-    best_store = _choose_best_store(stores)
-    selected_store_id = best_store.get("id") if best_store else None
-
-    # Find an offer for that store
-    offer_text = ""
-    if best_store:
-        for o in offers:
-            if o.get("store_id") == best_store["id"]:
-                offer_text = f" You also have a coupon: {o['description']} (code: {o['coupon_code']})."
-                break
-
-    # Construct reply based on primary intent
-    if primary_intent_name == "FIND_NEARBY_COFFEE_SHOP" and best_store:
-        reply = (
-            f"Hi {name}, you're close to {best_store['name']} "
-            f"({int(best_store.get('distance_m', 0))} meters away). "
-            f"It's currently {'open' if best_store.get('is_open_now') else 'closed'}. "
-        )
-        if best_store.get("is_open_now"):
-            reply += "You can step inside to warm up with a hot drink."
+        if best_store:
+            fallback_reply = (
+                f"You're close to {best_store['name']} "
+                f"({int(best_store.get('distance_m', 0))} meters away). "
+                f"It's currently {'open' if best_store.get('is_open_now') else 'closed'}."
+            )
+            selected_store_id = best_store.get("id")
         else:
-            reply += "It will open later according to its schedule."
-        reply += offer_text
-    else:
-        # generic fallback
-        reply = (
-            f"Hi {name}, I received your message: '{user_msg}'. "
-            "I’m still improving my understanding, but I can help you find nearby stores or track orders."
-        )
+            fallback_reply = (
+                "I couldn't find a suitable nearby store, but I can still help with general support."
+            )
+            selected_store_id = None
 
+        return {
+            "selected_intent": primary_intent_name,
+            "selected_store_id": selected_store_id,
+            "reasoning": "JSON parsing failed; used local heuristic fallback.",
+            "reply": fallback_reply,
+        }
+
+    # Minimal safety: ensure keys exist
     return {
-        "selected_intent": primary_intent_name,
-        "selected_store_id": selected_store_id,
-        "reply": reply,
-        "reasoning": primary_intent.get("reason") if primary_intent else "No primary intent detected.",
+        "selected_intent": data.get("selected_intent"),
+        "selected_store_id": data.get("selected_store_id"),
+        "reasoning": data.get("reasoning", ""),
+        "reply": data.get("reply", ""),
     }

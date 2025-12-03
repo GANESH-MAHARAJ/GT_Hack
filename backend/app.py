@@ -1,4 +1,5 @@
 from typing import Optional, List, Dict, Any
+from fastapi.middleware.cors import CORSMiddleware
 
 from fastapi import FastAPI
 from pydantic import BaseModel
@@ -12,6 +13,16 @@ from backend.llm.agent_response import get_final_response
 
 
 app = FastAPI(title="GroundTruth Concierge API")
+
+# Allow frontend (e.g., http://localhost:5500 or file:// origin in dev)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # for hackathon demo; in prod, lock this down
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 
 class ChatRequest(BaseModel):
