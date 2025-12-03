@@ -1,0 +1,8 @@
+backend/__pycache__/
+backend/llm/__pycache__/
+backend/privacy/__pycache__/
+backend/services/__pycache__/
+venv/
+.env
+node_modules/
+*.log
